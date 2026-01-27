@@ -18,6 +18,7 @@ class Trade(db.Model):
     quantity = db.Column(db.Integer, nullable = False)
     pnl = db.Column(db.Numeric(10,2), nullable = False)
     strategy = db.Column(db.String(50), nullable = True)
+    trade_type = db.Column(db.String(20), nullable = True)
 
 
     # convert trade object to dict
@@ -33,5 +34,6 @@ class Trade(db.Model):
             'exit_price': float(self.exit_price),
             'quantity': int(self.quantity),
             'pnl': float(self.pnl),
-            'strategy': self.strategy
+            'strategy': self.strategy,
+            'trade_type': self.trade_type
         }

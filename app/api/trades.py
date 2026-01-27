@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from datetime import datetime
 from app.db.models import db, Trade
+from app.services.metrics import detect_trade_type
 
 # create blueprint
 
@@ -24,6 +25,14 @@ def insert_trade():
 
     # create new trade
     try:
+
+        entry_time = datetime.fromisoformat(data['entry_time'])
+        exit_time = datetime.fromisoformat(data['exit_time'])
+
+        trade_type = data.get('trade_type')
+        if not trade_type:
+            trade_type = detect_trade_type(entry_time, exit_time
+            )
         trade = Trade(
             id=data['id'],
             acc_id=data['acc_id'],
@@ -35,7 +44,8 @@ def insert_trade():
             exit_price=float(data['exit_price']),
             quantity = int(data['quantity']),
             pnl = float(data['pnl']),
-            strategy = data.get('strategy', None) 
+            strategy = data.get('strategy', None) ,
+            trade_type = trade_type
         )
 
         db.session.add(trade)
@@ -76,5 +86,33 @@ def get_trades():
     except Exception as e:
         return jsonify({'Error': f'Failed to retrieve trades: {str(e)}'}), 500
 
+@trade_bp.route('/api/trades/<trade_id>', methods=['PATCH'])
+def update_trade(trade_id):
+    """update trade metadata(trade_type, tags, etc.)"""
+    try:
+        trade = Trade.query.filter_by(id=trade_id).first()
+
+        if not trade:
+            return jsonify({'error': f'Trade {trade_id} could not be updated'})
+
+        data = request.get_json()
+
+        # update trade_type if provided
+        if 'trade_type' in data:
+            allowed_types = ['day_trade', 'swing', 'long_term']
+            if data['trade_type'] not in allowed_types:
+                return jsonify({'errpr': f'Invalid trade type, must be from {allowed_types}'}), 400
+            trade.trade_type = data['trade_type']
+
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Trade udpated successfully',
+            'trade': trade.to_dict()
+
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to update trade: {str(e)}'}), 500
 
 
