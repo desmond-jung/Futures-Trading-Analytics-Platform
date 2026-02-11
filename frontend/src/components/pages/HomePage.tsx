@@ -1,16 +1,93 @@
+import { useState, useEffect, useMemo } from 'react';
 import { Calendar, BarChart3, Copy, Bot, Users, Link, TrendingUp } from 'lucide-react';
-import { PageType } from '../../App';
+import { PageType, DailyPnL, Trade, transformBackendTradeToFrontend } from '../../App';
+
+const API_URL = 'http://localhost:5001';
 
 interface HomePageProps {
   theme: 'light' | 'dark';
   onNavigate: (page: PageType) => void;
+  data?: DailyPnL[];  // Make optional with ?
 }
 
-export function HomePage({ theme, onNavigate }: HomePageProps) {
+export function HomePage({ theme, onNavigate, data = [] }: HomePageProps) {
   const textClass = theme === 'dark' ? 'text-[#E6EDF3]' : 'text-gray-900';
   const textSecondaryClass = theme === 'dark' ? 'text-[#9BA4B5]' : 'text-gray-600';
   const bgClass = theme === 'dark' ? 'bg-[#161B22]' : 'bg-white';
   const borderClass = theme === 'dark' ? 'border-[#2A2F3A]' : 'border-gray-200';
+
+  const stats = useMemo(() => {
+    // Safety check: if data is undefined or empty, return zero stats
+    if (!data || data.length === 0) {
+      return {
+        totalPnL: 0,
+        winRate: 0,
+        totalTrades: 0,
+      };
+    }
+
+    const allTrades = data.flatMap((day: DailyPnL) => day.trades || []);
+
+    if (allTrades.length === 0){
+      return {
+        totalPnL: 0,
+        winRate: 0,
+        totalTrades: 0,
+      };
+    }
+
+    const totalPnL = allTrades.reduce((sum: number, trade: Trade) => sum + trade.pnl, 0);
+
+    const winningTrades = allTrades.filter((trade: Trade) => trade.pnl > 0);
+    const winRate = (winningTrades.length / allTrades.length) * 100;
+    const totalTrades = allTrades.length;
+    
+    return {
+      totalPnL,
+      winRate,
+      totalTrades,
+    };
+  }, [data]);
+
+    // State for recent trades
+    const [recentTrades, setRecentTrades] = useState<Trade[]>([]);
+    const [isLoadingRecent, setIsLoadingRecent] = useState(false);
+  
+    // Fetch recent trades when component mounts
+    useEffect(() => {
+      const fetchRecentTrades = async () => {
+        setIsLoadingRecent(true);
+        try {
+          const response = await fetch(`${API_URL}/api/trades`);
+          if (!response.ok) throw new Error('Failed to fetch trades');
+          
+          const result = await response.json();
+          const backendTrades = result.trades || [];
+          
+          // Transform backend trades to frontend format
+          const trades: Trade[] = backendTrades.map(transformBackendTradeToFrontend);
+          
+          // Sort by exit_time (most recent first) and take top 3
+          const sorted = trades
+            .sort((a, b) => {
+              // Compare by date and time
+              const dateA = new Date(`${a.date}T${a.time}`).getTime();
+              const dateB = new Date(`${b.date}T${b.time}`).getTime();
+              return dateB - dateA;  // Descending order (newest first)
+            })
+            .slice(0, 3);  // Take only first 3
+          
+          setRecentTrades(sorted);
+        } catch (error) {
+          console.error('Error fetching recent trades:', error);
+          setRecentTrades([]);
+        } finally {
+          setIsLoadingRecent(false);
+        }
+      };
+      
+      fetchRecentTrades();
+    }, []);  // Empty array = run once on mount
 
   const quickLinks = [
     { id: 'calendar' as PageType, title: 'Calendar', description: 'View and manage your trades by date', icon: Calendar, color: 'blue' },
@@ -50,7 +127,9 @@ export function HomePage({ theme, onNavigate }: HomePageProps) {
             <span className={`text-sm font-medium ${textSecondaryClass}`}>Total P&L</span>
             <TrendingUp className="w-5 h-5 text-green-600" />
           </div>
-          <div className="text-3xl font-bold text-green-600">+$12,450.00</div>
+          <div className={`text-3xl font-bold ${stats.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            {stats.totalPnL >= 0 ? '+' : ''}${stats.totalPnL.toFixed(2)}
+          </div>
           <div className={`text-xs ${textSecondaryClass} mt-1`}>This month</div>
         </div>
 
@@ -59,7 +138,7 @@ export function HomePage({ theme, onNavigate }: HomePageProps) {
             <span className={`text-sm font-medium ${textSecondaryClass}`}>Win Rate</span>
             <BarChart3 className="w-5 h-5 text-blue-600" />
           </div>
-          <div className={`text-3xl font-bold ${textClass}`}>67.5%</div>
+          <div className={`text-3xl font-bold ${textClass}`}>{stats.winRate.toFixed(1)}%</div>
           <div className={`text-xs ${textSecondaryClass} mt-1`}>Last 30 days</div>
         </div>
 
@@ -68,7 +147,7 @@ export function HomePage({ theme, onNavigate }: HomePageProps) {
             <span className={`text-sm font-medium ${textSecondaryClass}`}>Total Trades</span>
             <Calendar className="w-5 h-5 text-purple-600" />
           </div>
-          <div className={`text-3xl font-bold ${textClass}`}>142</div>
+          <div className={`text-3xl font-bold ${textClass}`}>{stats.totalTrades}</div>
           <div className={`text-xs ${textSecondaryClass} mt-1`}>This month</div>
         </div>
       </div>
@@ -100,36 +179,43 @@ export function HomePage({ theme, onNavigate }: HomePageProps) {
       <div className="mt-8">
         <h2 className={`text-2xl font-bold ${textClass} mb-4`}>Recent Activity</h2>
         <div className={`${bgClass} rounded-lg shadow-sm border ${borderClass} p-6`}>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                <div>
-                  <p className={`font-medium ${textClass}`}>Trade added: AAPL Long</p>
-                  <p className={`text-sm ${textSecondaryClass}`}>2 hours ago</p>
-                </div>
-              </div>
-              <span className="text-green-600 font-semibold">+$450.00</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                <div>
-                  <p className={`font-medium ${textClass}`}>Trade added: TSLA Short</p>
-                  <p className={`text-sm ${textSecondaryClass}`}>5 hours ago</p>
-                </div>
-              </div>
-              <span className="text-red-600 font-semibold">-$120.00</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                <div>
-                  <p className={`font-medium ${textClass}`}>Imported 15 trades from CSV</p>
-                  <p className={`text-sm ${textSecondaryClass}`}>Yesterday</p>
-                </div>
-              </div>
-            </div>
+        <div className="space-y-4">
+            {isLoadingRecent ? (
+              <div className={`text-center ${textSecondaryClass}`}>Loading recent activity...</div>
+            ) : recentTrades.length === 0 ? (
+              <div className={`text-center ${textSecondaryClass}`}>No recent trades</div>
+            ) : (
+              recentTrades.map((trade) => {
+                const isWin = trade.pnl > 0;
+                const pnlColor = isWin ? 'text-green-600' : 'text-red-600';
+                const dotColor = isWin ? 'bg-green-500' : 'bg-red-500';
+                
+                // Format time ago (simplified - you can use a library like date-fns for better formatting)
+                const tradeDate = new Date(`${trade.date}T${trade.time}`);
+                const now = new Date();
+                const hoursAgo = Math.floor((now.getTime() - tradeDate.getTime()) / (1000 * 60 * 60));
+                const timeAgo = hoursAgo < 1 ? 'Just now' : 
+                               hoursAgo === 1 ? '1 hour ago' : 
+                               `${hoursAgo} hours ago`;
+                
+                return (
+                  <div key={trade.id} className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2 h-2 ${dotColor} rounded-full`}></div>
+                      <div>
+                        <p className={`font-medium ${textClass}`}>
+                          Trade: {trade.symbol} {trade.side.charAt(0).toUpperCase() + trade.side.slice(1)}
+                        </p>
+                        <p className={`text-sm ${textSecondaryClass}`}>{timeAgo}</p>
+                      </div>
+                    </div>
+                    <span className={`${pnlColor} font-semibold`}>
+                      {trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}
+                    </span>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       </div>

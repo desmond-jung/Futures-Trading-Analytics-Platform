@@ -53,7 +53,7 @@ export interface UserSettings {
 export type PageType = 'home' | 'calendar' | 'dashboard' | 'ai-insights' | 'query' | 'market-events' | 'trade-copier' | 'trading-bot' | 'accounts' | 'connections';
 
 // Transform backend trade format to frontend format
-const transformBackendTradeToFrontend = (backendTrade: any): Trade => {
+export const transformBackendTradeToFrontend = (backendTrade: any): Trade => {
   const entryTime = new Date(backendTrade.entry_time);
   const date = entryTime.toISOString().split('T')[0];
   
@@ -246,7 +246,7 @@ export default function App() {
   const renderPage = () => {
     switch (currentPage) {
       case 'home':
-        return <HomePage theme={settings.theme} onNavigate={setCurrentPage} />;
+        return <HomePage theme={settings.theme} onNavigate={setCurrentPage} data={tradeData} />;
       case 'calendar':
         return (
           <>
@@ -307,7 +307,7 @@ export default function App() {
       case 'connections':
         return <ComingSoonPage title="Connections" theme={settings.theme} />;
       default:
-        return <HomePage theme={settings.theme} onNavigate={setCurrentPage} />;
+        return <HomePage theme={settings.theme} onNavigate={setCurrentPage} data={tradeData} />;
     }
   };
 

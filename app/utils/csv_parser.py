@@ -488,14 +488,26 @@ def process_filled_orders_to_trades(account: str = None) -> Dict[str, Any]:
             nonlocal trades_created, current_trade_orders
             if len(current_trade_orders) > 0:
                 try:
+                    # Check if trade already exists before creating
                     trade = _create_trade_from_orders(current_trade_orders, acc, contract)
                     if trade:
-                        db.session.add(trade)
-                        trades_created += 1
-                        # Mark orders as matched
-                        for o in current_trade_orders:
-                            o.is_matched = True
-                            o.matched_trade_id = trade.id
+                        # Check if trade with this ID already exists (idempotency)
+                        existing_trade = Trade.query.filter_by(id=trade.id).first()
+                        if existing_trade:
+                            # Trade already exists - just mark orders as matched to existing trade
+                            print(f"🔄 DEBUG: Trade {trade.id[:20]}... already exists, skipping creation", file=sys.stderr)
+                            for o in current_trade_orders:
+                                if not o.is_matched:  # Only update if not already matched
+                                    o.is_matched = True
+                                    o.matched_trade_id = existing_trade.id
+                        else:
+                            # New trade - create it
+                            db.session.add(trade)
+                            trades_created += 1
+                            # Mark orders as matched
+                            for o in current_trade_orders:
+                                o.is_matched = True
+                                o.matched_trade_id = trade.id
                 except Exception as e:
                     errors.append(f"Error creating trade from orders: {str(e)}")
                 current_trade_orders = []
@@ -658,8 +670,13 @@ def _create_trade_from_orders(orders: List[Order], account: str, contract: str) 
     # Create fills array: all orders as dicts
     fills = [order.to_dict() for order in orders]
     
-    # Generate trade ID
-    trade_id = f"trade_{uuid.uuid4().hex[:12]}"
+    # Generate deterministic trade ID based on order IDs (for idempotency)
+    # Sort order IDs to ensure same set of orders always produces same trade ID
+    # This ensures re-importing the same CSV won't create duplicate trades
+    order_ids = sorted([order.id for order in orders])
+    order_ids_str = "|".join(order_ids)
+    trade_id_hash = hashlib.sha1(order_ids_str.encode('utf-8')).hexdigest()[:16]
+    trade_id = f"trade_{trade_id_hash}"
     
     # Detect trade type (day trade vs swing)
     from app.services.metrics import detect_trade_type
