@@ -205,12 +205,14 @@ def import_trades_csv():
             from app.utils.csv_parser import process_filled_orders_to_trades
             match_result = process_filled_orders_to_trades(account=account)
             trades_created = match_result.get('trades_created', 0)
+            trades_matched = match_result.get('trades_matched', 0)
             filled_count = match_result.get('filled_orders_count', 0)
             errors.extend(match_result.get('errors', []))
             
             print(f"🔄 DEBUG: Matching result:", file=sys.stderr)
             print(f"  - Filled orders found: {filled_count}", file=sys.stderr)
             print(f"  - Trades created: {trades_created}", file=sys.stderr)
+            print(f"  - Trades matched (existing): {trades_matched}", file=sys.stderr)
             print(f"  - Errors: {len(match_result.get('errors', []))}", file=sys.stderr)
             
             # Get the created trades from database
@@ -228,6 +230,7 @@ def import_trades_csv():
             'message': f'Imported {len(saved_orders)} new orders, created {trades_created} trades',
             'orders_saved': len(saved_orders),
             'trades_created': trades_created,
+            'trades_matched': trades_matched,  # Existing trades that orders were matched to
             'trades': [t.to_dict() for t in created_trades],
             'errors': errors[:20],  # Limit errors in response
             'debug_info': {
@@ -292,3 +295,12 @@ def match_orders():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+@trade_bp.route('/api/trades/import/tradovate', methods=['POST'])
+def import_tradovate():
+    # 1. Authenticate with Tradovate (using hardcoded creds for now)
+    # 2. Fetch fills/orders from Tradovate
+    # 3. Transform to your format
+    # 4. Save to database
+    # 5. Match into trades
+    return None

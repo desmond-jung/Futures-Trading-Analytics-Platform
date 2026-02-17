@@ -55,15 +55,37 @@ export function ImportModal({ onClose, onImport, theme }: ImportModalProps) {
       }
 
       // Show success message
-      const importedCount = data.imported_count || (data.trades?.length || 0);
-      const skippedCount = data.skipped_count || 0;
+      // Backend returns 'trades_created' not 'imported_count'
+      const tradesCreated = data.trades_created || 0;
+      const tradesMatched = data.trades_matched || 0;  // Existing trades that orders were matched to
+      const ordersSaved = data.orders_saved || 0;
       
-      if (importedCount === 0 && skippedCount === 0) {
+      // Check if trades were created OR matched OR orders were saved
+      if (tradesCreated === 0 && tradesMatched === 0 && ordersSaved === 0) {
         setErrorMessage('No trades were imported. Check your CSV format.');
         return;
       }
 
-      alert(`Successfully imported ${importedCount} trades!${skippedCount > 0 ? ` (${skippedCount} skipped as duplicates)` : ''}`);
+      // Show appropriate message based on what happened
+      let successMessage = '';
+      if (tradesCreated > 0) {
+        successMessage = `Successfully imported ${tradesCreated} new trade${tradesCreated > 1 ? 's' : ''}!`;
+        if (ordersSaved > 0) {
+          successMessage += ` (${ordersSaved} orders saved)`;
+        }
+      } else if (tradesMatched > 0) {
+        // Orders were matched to existing trades (idempotent re-import)
+        successMessage = `Orders matched to ${tradesMatched} existing trade${tradesMatched > 1 ? 's' : ''}.`;
+        if (ordersSaved > 0) {
+          successMessage += ` (${ordersSaved} orders saved)`;
+        }
+      } else if (ordersSaved > 0) {
+        successMessage = `Saved ${ordersSaved} orders, but no trades were created. ${data.warning || 'Check if orders are filled.'}`;
+      }
+      
+      if (successMessage) {
+        alert(successMessage);
+      }
 
       // Call onImport to trigger data refresh in parent
       onImport();

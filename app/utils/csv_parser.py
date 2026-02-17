@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.utils.contract_multipliers import get_contract_multiplier
 
 import csv
 import hashlib
@@ -66,13 +67,25 @@ def combine_date_time(date_str: str, time_str: Optional[str] = None) -> datetime
     
     return date_obj
 
-def calculate_pnl(entry_price: float, exit_price: float, quantity: int, side: str) -> float:
+def calculate_pnl(entry_price: float, exit_price: float, quantity: int, side: str, contract: str = None) -> float:
+    """
+    Calculate PnL for a trade.
+    
+    Args:
+        entry_price: Entry price
+        exit_price: Exit price
+        quantity: Number of contracts
+        side: 'long' or 'short'
+        contract: Contract symbol (e.g., 'MGCG6') for multiplier lookup
+    """
+    from app.utils.contract_multipliers import get_contract_multiplier
+    
+    multiplier = get_contract_multiplier(contract) if contract else 1.0
+    
     if side.lower() == 'long':
-        return (exit_price - entry_price) * quantity
-
+        return (exit_price - exit_price) * quantity * multiplier
     else:
-        return (entry_price - exit_price) * quantity
-
+        return (entry_price - exit_price) * quantity * multiplier
 
 def map_csv_row_to_backend_format(row:Dict[str, str], default_acc_id: str = "default") -> Dict[str, Any]:
     """
@@ -432,6 +445,7 @@ def process_filled_orders_to_trades(account: str = None) -> Dict[str, Any]:
     
     errors = []
     trades_created = 0
+    trades_matched = 0  # Count of existing trades that orders were matched to
     
     # Get all filled orders, sorted by fill_time
     query = Order.query.filter_by(is_filled=True).filter(Order.fill_time.isnot(None))
@@ -485,7 +499,7 @@ def process_filled_orders_to_trades(account: str = None) -> Dict[str, Any]:
         
         # Helper function to close current trade
         def close_current_trade():
-            nonlocal trades_created, current_trade_orders
+            nonlocal trades_created, trades_matched, current_trade_orders
             if len(current_trade_orders) > 0:
                 try:
                     # Check if trade already exists before creating
@@ -496,6 +510,25 @@ def process_filled_orders_to_trades(account: str = None) -> Dict[str, Any]:
                         if existing_trade:
                             # Trade already exists - just mark orders as matched to existing trade
                             print(f"🔄 DEBUG: Trade {trade.id[:20]}... already exists, skipping creation", file=sys.stderr)
+                            
+                            # Recalculate PnL for existing trade using multiplier (in case it was created before multiplier was added)
+                            from app.utils.contract_multipliers import get_contract_multiplier
+                            multiplier = get_contract_multiplier(existing_trade.symbol)
+                            old_pnl = float(existing_trade.pnl)
+                            
+                            # Recalculate PnL with multiplier
+                            if existing_trade.direction == 'LONG':
+                                new_pnl = (float(existing_trade.exit_price) - float(existing_trade.entry_price)) * existing_trade.quantity * multiplier
+                            else:  # SHORT
+                                new_pnl = (float(existing_trade.entry_price) - float(existing_trade.exit_price)) * existing_trade.quantity * multiplier
+                            
+                            # Only update if PnL changed significantly (more than 1% difference)
+                            if abs(new_pnl - old_pnl) > abs(old_pnl * 0.01):
+                                print(f"💰 DEBUG: Recalculating PnL for existing trade {existing_trade.id[:20]}...", file=sys.stderr)
+                                print(f"  - Old PnL: {old_pnl}, New PnL: {new_pnl} (multiplier: {multiplier})", file=sys.stderr)
+                                existing_trade.pnl = new_pnl
+                            
+                            trades_matched += 1
                             for o in current_trade_orders:
                                 if not o.is_matched:  # Only update if not already matched
                                     o.is_matched = True
@@ -567,6 +600,7 @@ def process_filled_orders_to_trades(account: str = None) -> Dict[str, Any]:
     
     print(f"\n🔄 DEBUG: Matching complete:", file=sys.stderr)
     print(f"  - Trades created: {trades_created}", file=sys.stderr)
+    print(f"  - Trades matched (existing): {trades_matched}", file=sys.stderr)
     print(f"  - Errors: {len(errors)}", file=sys.stderr)
     
     # Commit all trades
@@ -582,6 +616,7 @@ def process_filled_orders_to_trades(account: str = None) -> Dict[str, Any]:
     return {
         'filled_orders_count': filled_count,
         'trades_created': trades_created,
+        'trades_matched': trades_matched,  # Existing trades that orders were matched to
         'errors': errors
     }
 
@@ -661,15 +696,17 @@ def _create_trade_from_orders(orders: List[Order], account: str, contract: str) 
     entry_time = orders[0].fill_time
     exit_time = orders[-1].fill_time
     
-    # Calculate PnL
+    # Get contract multiplier (dollar value per point)
+    multiplier = get_contract_multiplier(contract)
+
     if direction == 'LONG':
-        pnl = (exit_price - entry_price) * entry_qty
+        pnl = (exit_price - entry_price) * entry_qty * multiplier
     else:  # SHORT
-        pnl = (entry_price - exit_price) * entry_qty
+        pnl = (entry_price - exit_price) * entry_qty * multiplier
     
     # Create fills array: all orders as dicts
     fills = [order.to_dict() for order in orders]
-    
+
     # Generate deterministic trade ID based on order IDs (for idempotency)
     # Sort order IDs to ensure same set of orders always produces same trade ID
     # This ensures re-importing the same CSV won't create duplicate trades

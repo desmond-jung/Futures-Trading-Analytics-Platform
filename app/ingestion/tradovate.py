@@ -66,7 +66,7 @@ def get_fills():
         else:
             print("No fills found")
         
-        return fills
+        return fills[-1]
     else:
         print(f"Error: {response.text}")
         return []
@@ -120,32 +120,6 @@ def get_orders_list(ord_status = None):
     data = response.json()
     print(json.dumps(data[-3:]))
 
-def get_order_item(order_id):
-    headers = get_headers()
-    url = 'https://demo.tradovateapi.com/v1/order/item'
-
-    params = {
-        id = order_id
-    }
-
-    response = requests.get(url, headers=headers, params=params)
-
-    if response.status_code != 200:
-        print("Error:", response.text)
-        return None
- 
-    import json
-    data = response.json()
-
-def get_filled_orders():
-    # Return only orders that have fills. Call get_orders(ord_status="Filled") and return that list (or thin wrapper). Used so we only fetch fills for orders that can have them.
-    get_orders_list(ord_status = "Filled")
-    return None
-
-def parse_order_relationships(order):
-    # Return only orders that have fills. Call get_orders(ord_status="Filled") and return that list (or thin wrapper). Used so we only fetch fills for orders that can have them.
-    return None
-
 def build_bracket_oco_groups(orders):
     # Take the full list of orders from order/list. Group by parentId (brackets) and by ocoId (OCO). Return a dict: key = group identifier (e.g. "parent:<id>" or "oco:<id>" or "standalone:<id>"), value = list of order IDs in that group. Used so we know which order IDs belong together for fetching fills and pairing entry/exi
     
@@ -186,38 +160,12 @@ def build_bracket_oco_groups(orders):
 
     return groups
 
-def get_fills_by_order_ids(order_ids: int):
-    # Given a list of order IDs (e.g. from one bracket/OCO group), return a dict order_id -> list of fills. Either call get_fill_dependents(order_id) for each ID, or call get_fills() once and filter by orderId in that list. Used to gather all fills for a group before pairing entry/exit.
-    return None
-def pair_entry_exit_fills(fills_for_group):
-    # ake a list of fill dicts for one bracket/OCO group (or single order), sorted by time. Identify entry fill(s) and exit fill(s) (e.g. by action Buy/Sell and timestamp). Return a list of (entry_fill, exit_fill) pairs (or equivalent structure) so PnL can be computed per pair.
-    return None
-def compute_pnl_for_pair(entry_fill, exit_fill, contract_multiplier):
-    # Given one entry fill and one exit fill, compute realized PnL: (exit_price - entry_price) * qty * multiplier, with sign corrected for direction (Buy vs Sell). Return a number (or a small dict with pnl and metadata). Used after pairing entry/exit
-    return None
-
 
 if __name__ == '__main__':
-    authenticate()
-    print("Token stored")
-    get_orders_list()
-    #get_fills()
-
-
-# 1.  authenticate()
-
-# 2.  orders = get_filled_orders()                    # uses get_orders("Filled") under the hood
-# 3.  groups = build_bracket_oco_groups(orders)      # group_key -> [order_id, ...]
-
-# 4.  for each (group_key, order_ids) in groups:
-# 5.      fills_by_order = get_fills_by_order_ids(order_ids)   # uses get_fill_dependents (or get_fills) per id
-# 6.      all_fills_for_group = flatten fills_by_order into one list, sort by timestamp
-# 7.      pairs = pair_entry_exit_fills(all_fills_for_group)
-# 8.      for each (entry_fill, exit_fill) in pairs:
-# 9.          pnl = compute_pnl_for_pair(entry_fill, exit_fill)
-# 10.         # store or send (group_key, entry_fill, exit_fill, pnl) to journal/UI
-
-# get_headers is used inside get_filled_orders, get_fills, and get_fill_dependents (and thus inside get_fills_by_order_ids).
-# get_orders is used only by get_filled_orders.
-# get_fill_dependents is used by get_fills_by_order_ids (or you substitute get_fills + filter by orderId).
-# parse_order_relationships is optional and doesn’t drive the flow; it’s for inspecting one order.
+    # Simple manual test harness so you can run:
+    #   python -m app.ingestion.tradovate
+    # to verify authentication and basic API calls.
+    if authenticate():
+        print("Token stored")
+        get_fills()
+        # get_fills()
