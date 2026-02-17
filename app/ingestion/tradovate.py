@@ -48,27 +48,41 @@ def get_headers():
         }   
 
 def get_fills():
-    headers = get_headers()
-
+    """
+    Get all fills from Tradovate API.
+    
+    Returns:
+        List of fill dictionaries, or empty list if error
+    """
+    try:
+        headers = get_headers()
+    except Exception as e:
+        print(f"❌ Error getting headers (not authenticated?): {str(e)}")
+        return []
+    
     url = 'https://demo.tradovateapi.com/v1/fill/list'
 
-    response = requests.get(url, headers=headers)
-
-    if response.status_code == 200:
-        fills = response.json()
-        print(f"Success: Got {len(fills)} fills")
-
-        # show first fill to see schema
-        if len(fills) > 0:
-            import json
-            print("Fill schema")
-            print(json.dumps(fills, indent=2))
-        else:
-            print("No fills found")
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
         
-        return fills[-1]
-    else:
-        print(f"Error: {response.text}")
+        if response.status_code == 200:
+            fills = response.json()
+            print(f"✅ Success: Got {len(fills)} fills from Tradovate API")
+
+            # show first fill to see schema
+            if len(fills) > 0:
+                import json
+                print("📋 Fill schema (first fill):")
+                print(json.dumps(fills[0], indent=2))
+            else:
+                print("⚠️  No fills found in Tradovate account")
+            
+            return fills if isinstance(fills, list) else []  # Return the entire list
+        else:
+            print(f"❌ Error fetching fills: Status {response.status_code}, {response.text}")
+            return []
+    except Exception as e:
+        print(f"❌ Exception fetching fills: {str(e)}")
         return []
 
 def get_fill_dependents(order_id: int):
@@ -120,6 +134,48 @@ def get_orders_list(ord_status = None):
     data = response.json()
     print(json.dumps(data[-3:]))
 
+def get_contract_info(contract_id: int):
+    """
+    Get contract information from Tradovate API using contractId.
+    
+    Returns:
+        Contract symbol (e.g., "MNQH6", "MGCG6") or None if not found
+    """
+    if not contract_id:
+        return None
+    print(contract_id)
+    headers = get_headers()
+    url = f'https://demo.tradovateapi.com/v1/contract/item/{contract_id}'
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            import json
+            print(json.dumps(data, indent=2))
+            
+            # Try different possible field names for contract symbol
+            # Common formats: "name", "symbol", "contractName", "rootSymbol"
+            contract_symbol = (
+                data.get("name") or 
+                data.get("symbol") or 
+                data.get("contractName") or
+                data.get("rootSymbol") or
+                None
+            )
+            
+            # If we got something like "MNQ Mar 2026", extract just "MNQH6" or "MNQ"
+            if contract_symbol and " " in contract_symbol:
+                # Take first part (e.g., "MNQ" from "MNQ Mar 2026")
+                contract_symbol = contract_symbol.split()[0]
+            
+            return contract_symbol
+        else:
+            print("No contract found")
+            return None
+    except Exception as e:
+        return None
+
 def build_bracket_oco_groups(orders):
     # Take the full list of orders from order/list. Group by parentId (brackets) and by ocoId (OCO). Return a dict: key = group identifier (e.g. "parent:<id>" or "oco:<id>" or "standalone:<id>"), value = list of order IDs in that group. Used so we know which order IDs belong together for fetching fills and pairing entry/exi
     
@@ -166,6 +222,6 @@ if __name__ == '__main__':
     #   python -m app.ingestion.tradovate
     # to verify authentication and basic API calls.
     if authenticate():
-        print("Token stored")
-        get_fills()
+        get_orders_list()
+        get_contract_info(4214197)
         # get_fills()

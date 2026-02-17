@@ -298,9 +298,168 @@ def match_orders():
 
 @trade_bp.route('/api/trades/import/tradovate', methods=['POST'])
 def import_tradovate():
-    # 1. Authenticate with Tradovate (using hardcoded creds for now)
-    # 2. Fetch fills/orders from Tradovate
-    # 3. Transform to your format
-    # 4. Save to database
-    # 5. Match into trades
-    return None
+    """
+    Import trades from Tradovate API.
+    
+    Flow:
+    1. Authenticate with Tradovate (using hardcoded creds for now)
+    2. Fetch fills/orders from Tradovate
+    3. Save fills to database
+    4. Match orders into trades
+    """
+    import sys
+    print("\n" + "="*80, file=sys.stderr)
+    print("🔍 DEBUG: Tradovate Import Started", file=sys.stderr)
+    print("="*80, file=sys.stderr)
+    
+    try:
+        # Get account from request (optional, defaults to "default")
+        account = "default"
+        if request.is_json:
+            account = request.get_json().get('account', account)
+        elif request.form:
+            account = request.form.get('account', account)
+        
+        print(f"📋 DEBUG: Using account = {account}", file=sys.stderr)
+        
+        # Step 1: Authenticate with Tradovate
+        print(f"\n🔐 DEBUG: Step 1 - Authenticating with Tradovate...", file=sys.stderr)
+        from app.ingestion.tradovate import authenticate, get_fills
+        
+        if not authenticate():
+            print("❌ DEBUG: Tradovate authentication failed!", file=sys.stderr)
+            return jsonify({
+                'error': 'Failed to authenticate with Tradovate',
+                'orders_saved': 0,
+                'trades_created': 0
+            }), 401
+        
+        print("✅ DEBUG: Authentication successful", file=sys.stderr)
+        
+        # Step 2: Fetch fills from Tradovate
+        print(f"\n📥 DEBUG: Step 2 - Fetching fills from Tradovate...", file=sys.stderr)
+        fills = get_fills()
+        
+        # Ensure fills is a list
+        if not isinstance(fills, list):
+            fills = [] if not fills else [fills] if isinstance(fills, dict) else []
+        
+        if not fills or len(fills) == 0:
+            print("⚠️  DEBUG: No fills found from Tradovate", file=sys.stderr)
+            return jsonify({
+                'message': 'No fills found from Tradovate',
+                'orders_saved': 0,
+                'trades_created': 0,
+                'trades': [],
+                'errors': []
+            }), 200
+        
+        print(f"✅ DEBUG: Fetched {len(fills)} fills from Tradovate", file=sys.stderr)
+        
+        # Determine account from fills if not provided
+        if account == "default" and fills and fills[0].get('accountId'):
+            account = str(fills[0].get('accountId'))
+            print(f"📋 DEBUG: Using account from Tradovate fills: {account}", file=sys.stderr)
+        
+        # Step 3: Save fills to database
+        print(f"\n📦 DEBUG: Step 3 - Saving fills to database...", file=sys.stderr)
+        from app.utils.tradovate_parser import save_tradovate_fills_to_db
+        
+        saved_orders, errors = save_tradovate_fills_to_db(fills, account=account)
+        
+        print(f"📦 DEBUG: Saved {len(saved_orders)} orders", file=sys.stderr)
+        print(f"📦 DEBUG: Encountered {len(errors)} errors/warnings", file=sys.stderr)
+        if errors:
+            print(f"📦 DEBUG: First 5 errors: {errors[:5]}", file=sys.stderr)
+        
+        # If no new orders were saved, this can still be a valid idempotent import
+        if not saved_orders and not errors:
+            print("❌ DEBUG: No orders saved and no errors - Tradovate returned no valid fills", file=sys.stderr)
+            return jsonify({
+                'error': 'No orders were saved',
+                'errors': ['Tradovate returned fills but none could be saved'],
+                'orders_saved': 0,
+                'trades_created': 0
+            }), 400
+        
+        # Step 4: Match filled orders into trades (position-based matching)
+        auto_match = request.get_json().get('auto_match', True) if request.is_json else True
+        print(f"\n🔄 DEBUG: Step 4 - Matching orders to trades (auto_match={auto_match})...", file=sys.stderr)
+        
+        trades_created = 0
+        trades_matched = 0
+        created_trades = []
+        filled_count = 0
+        match_result = {}
+        
+        if auto_match:
+            from app.utils.csv_parser import process_filled_orders_to_trades
+            match_result = process_filled_orders_to_trades(account=account)
+            trades_created = match_result.get('trades_created', 0)
+            trades_matched = match_result.get('trades_matched', 0)
+            filled_count = match_result.get('filled_orders_count', 0)
+            errors.extend(match_result.get('errors', []))
+            
+            print(f"🔄 DEBUG: Matching result:", file=sys.stderr)
+            print(f"  - Filled orders found: {filled_count}", file=sys.stderr)
+            print(f"  - Trades created: {trades_created}", file=sys.stderr)
+            print(f"  - Trades matched (existing): {trades_matched}", file=sys.stderr)
+            print(f"  - Errors: {len(match_result.get('errors', []))}", file=sys.stderr)
+            
+            # Get the created trades from database
+            if trades_created > 0:
+                # Query the most recently created trades (limit to 50 for response)
+                created_trades = Trade.query.order_by(Trade.exit_time.desc()).limit(50).all()
+                print(f"🔄 DEBUG: Retrieved {len(created_trades)} trades from database", file=sys.stderr)
+            else:
+                print(f"⚠️  DEBUG: No trades created! Check matching logic.", file=sys.stderr)
+                if match_result.get('errors'):
+                    print(f"⚠️  DEBUG: Matching errors: {match_result.get('errors')[:5]}", file=sys.stderr)
+        
+        # Return response
+        response_data = {
+            'message': f'Imported {len(saved_orders)} orders from Tradovate, created {trades_created} trades',
+            'orders_saved': len(saved_orders),
+            'trades_created': trades_created,
+            'trades_matched': trades_matched,  # Existing trades that orders were matched to
+            'trades': [t.to_dict() for t in created_trades],
+            'errors': errors[:20],  # Limit errors in response
+            'debug_info': {
+                'filled_orders_count': filled_count,
+                'account_used': account,
+                'auto_match_enabled': auto_match,
+                'fills_fetched': len(fills)
+            }
+        }
+        
+        # If no trades created but orders were saved, add helpful message
+        if trades_created == 0 and len(saved_orders) > 0:
+            response_data['warning'] = (
+                'Orders were saved but no trades were created. '
+                'This might mean there are no filled orders, or matching failed. '
+                'Check the errors array for details.'
+            )
+        
+        print(f"\n✅ DEBUG: Returning response:", file=sys.stderr)
+        print(f"  - orders_saved: {response_data['orders_saved']}", file=sys.stderr)
+        print(f"  - trades_created: {response_data['trades_created']}", file=sys.stderr)
+        print(f"  - trades_matched: {response_data['trades_matched']}", file=sys.stderr)
+        print(f"  - trades in response: {len(response_data['trades'])}", file=sys.stderr)
+        print(f"  - errors: {len(response_data['errors'])}", file=sys.stderr)
+        if 'warning' in response_data:
+            print(f"  - WARNING: {response_data['warning']}", file=sys.stderr)
+        print("="*80 + "\n", file=sys.stderr)
+        
+        return jsonify(response_data), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ DEBUG: Exception in Tradovate import: {str(e)}", file=sys.stderr)
+        print(f"❌ DEBUG: Traceback: {error_trace}", file=sys.stderr)
+        return jsonify({
+            'error': f'Failed to import from Tradovate: {str(e)}',
+            'orders_saved': 0,
+            'trades_created': 0
+        }), 500

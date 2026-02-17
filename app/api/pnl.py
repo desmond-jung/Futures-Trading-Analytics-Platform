@@ -129,22 +129,22 @@ def get_daily_pnl():
         if symbol:
             query = query.filter_by(symbol=symbol)
         if start_date:
-            # Convert trading day to datetime range
-            # If start_date is just a date (YYYY-MM-DD), treat it as a trading day
+            # Simple date filtering - use calendar date, not trading day
             if 'T' not in start_date:
-                # It's a date string, get the trading day range
-                start_range, _ = get_trading_day_range(start_date, market_close_hour=15, timezone='America/Los_Angeles')
-                query = query.filter(Trade.exit_time >= start_range)
+                # It's a date string (YYYY-MM-DD), use it as calendar date
+                start = datetime.strptime(start_date, '%Y-%m-%d')
+                query = query.filter(Trade.exit_time >= start)
             else:
                 # It's a full datetime, use as-is
                 start = datetime.fromisoformat(start_date)
                 query = query.filter(Trade.exit_time >= start)
         if end_date:
-            # Convert trading day to datetime range
+            # Simple date filtering - use calendar date, not trading day
             if 'T' not in end_date:
-                # It's a date string, get the trading day range
-                _, end_range = get_trading_day_range(end_date, market_close_hour=15, timezone='America/Los_Angeles')
-                query = query.filter(Trade.exit_time <= end_range)
+                # It's a date string (YYYY-MM-DD), use end of that day
+                end = datetime.strptime(end_date, '%Y-%m-%d')
+                end = end.replace(hour=23, minute=59, second=59)
+                query = query.filter(Trade.exit_time <= end)
             else:
                 # It's a full datetime, use as-is
                 end = datetime.fromisoformat(end_date)

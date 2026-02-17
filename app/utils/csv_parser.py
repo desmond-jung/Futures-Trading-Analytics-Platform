@@ -490,6 +490,13 @@ def process_filled_orders_to_trades(account: str = None) -> Dict[str, Any]:
     # Process each (account, contract) group
     for (acc, contract), orders in orders_by_key.items():
         print(f"\n🔄 DEBUG: Processing {contract} (account: {acc}), {len(orders)} orders", file=sys.stderr)
+        
+        # Skip if contract is None or empty (can't create trade without symbol)
+        if not contract or (isinstance(contract, str) and contract.strip() == ''):
+            print(f"⚠️  DEBUG: Skipping {len(orders)} orders with missing contract", file=sys.stderr)
+            errors.append(f"Skipped {len(orders)} orders with missing contract for account {acc}")
+            continue
+        
         # Sort by fill_time within this group
         orders.sort(key=lambda o: o.fill_time)
         
@@ -708,8 +715,7 @@ def _create_trade_from_orders(orders: List[Order], account: str, contract: str) 
     fills = [order.to_dict() for order in orders]
 
     # Generate deterministic trade ID based on order IDs (for idempotency)
-    # Sort order IDs to ensure same set of orders always produces same trade ID
-    # This ensures re-importing the same CSV won't create duplicate trades
+
     order_ids = sorted([order.id for order in orders])
     order_ids_str = "|".join(order_ids)
     trade_id_hash = hashlib.sha1(order_ids_str.encode('utf-8')).hexdigest()[:16]

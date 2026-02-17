@@ -56,7 +56,7 @@ def save_tradovate_fills_to_db(fills, account = "default"):
     """
 
     saved_orders: List[Order] = []
-    errors: List[Order] = []
+    errors: List[str] = []
 
 
     if not fills:
@@ -83,11 +83,10 @@ def save_tradovate_fills_to_db(fills, account = "default"):
         try:
             fill_id = fill.get("id")
             if fill_id is None:
-                error.append(f"Fill at index {idx}: missing 'id")
+                errors.append(f"Fill at index {idx}: missing 'id' field")
                 continue
-            order_pk = f"fill-{fill_id}"
             
-            existing = Order.query.get(order_pk)
+            order_pk = f"fill-{fill_id}"
             order_id = str(fill.get("orderId")) if fill.get("orderId") is not None else None
             action = fill.get("action", "").capitalize()
             qty = fill.get("qty")
@@ -106,45 +105,109 @@ def save_tradovate_fills_to_db(fills, account = "default"):
             is_buy = action == "Buy"
             is_sell = action == "Sell"
 
-            # create or update Order instance
+            # Check for existing order in this priority:
+            # 1. Check by primary key (fill-{fill_id}) - for idempotent Tradovate re-imports
+            existing_by_pk = Order.query.get(order_pk)
+            
+            # 2. Check by (order_id, account) - to detect CSV/Tradovate overlap
+            existing_by_order_id = None
+            if order_id and account_id:
+                existing_by_order_id = Order.query.filter_by(
+                    order_id=order_id,
+                    account=account_id
+                ).first()
+            
+            # Determine which existing order to use (prefer CSV order if both exist)
+            existing = existing_by_order_id if existing_by_order_id else existing_by_pk
+            
             if existing:
+                # Order already exists - update it
                 order = existing
+                
+                # Update fields if they're missing or changed
+                updated = False
+                if not order.fill_time and fill_time:
+                    order.fill_time = fill_time
+                    updated = True
+                if order.avg_price != price:
+                    order.avg_price = price
+                    updated = True
+                if order.filled_qty != qty:
+                    order.filled_qty = qty
+                    updated = True
+                if order.status != "Filled":
+                    order.status = "Filled"
+                    order.is_filled = True
+                    updated = True
+                
+                
+                # Update contract if missing
+                if not order.contract:
+                    contract_id = fill.get("contractId")
+                    if contract_id:
+                        from app.ingestion.tradovate import get_contract_info
+                        contract_symbol = get_contract_info(contract_id)
+                        if contract_symbol:
+                            order.contract = contract_symbol
+                            updated = True
+                
+                # Update Tradovate-specific fields
+                if not order.raw_csv_data or order.text != "Tradovate import":
+                    order.raw_csv_data = fill
+                    order.text = "Tradovate import"
+                    updated = True
+                
+                if updated:
+                    import sys
+                    print(f"🔄 DEBUG: Updated existing order {order.id[:30]}... (order_id={order_id}, account={account_id})", file=sys.stderr)
+                
+                saved_orders.append(order)
             else:
-                order = Order(id=order_id)
-
-            order.order_id = order_id
-            order.account = account_id
-            order.b_s = action  # "Buy" or "Sell"
-            # For now we don't know symbol/product; you can enhance this later with contract lookup
-            order.contract = None
-            order.product = None
-            order.avg_price = price
-            order.filled_qty = qty
-            order.fill_time = fill_time
-            order.status = "Filled"
-            order.limit_price = None
-            order.stop_price = None
-            order.order_type = None
-            order.text = "Tradovate import"
-            order.raw_csv_data = fill  # store full fill dict for debugging
-            order.is_filled = True
-            order.is_buy = is_buy
-            order.is_sell = is_sell
-
-            if not existing:
+                # Create new order
+                order = Order(id=order_pk)  # Use fill-{fill_id} as primary key
+                order.order_id = order_id
+                order.account = account_id
+                order.b_s = action  # "Buy" or "Sell"
+                
+                # Extract contract symbol from Tradovate fill
+                contract_id = fill.get("contractId")
+                contract_symbol = None
+                
+                if contract_id:
+                    # Look up contract symbol from Tradovate API
+                    from app.ingestion.tradovate import get_contract_info
+                    contract_symbol = get_contract_info(contract_id)
+                
+                order.contract = contract_symbol
+                order.product = None
+                order.avg_price = price
+                order.filled_qty = qty
+                order.fill_time = fill_time
+                order.status = "Filled"
+                order.limit_price = None
+                order.stop_price = None
+                order.order_type = None
+                order.text = "Tradovate import"
+                order.raw_csv_data = fill  # store full fill dict for debugging
+                order.is_filled = True
+                order.is_buy = is_buy
+                order.is_sell = is_sell
+                
                 db.session.add(order)
                 saved_orders.append(order)
-            else:
-                # Existing order updated in-place; still count it as "saved"
-                saved_orders.append(order)
 
-        try:
-            db.session.commit()
         except Exception as e:
-            db.session.rollback()
-            errors.insert(0, f"Database error committing Tradovate fills: {str(e)}")
-            # If commit fails, nothing was actually saved
-            return [], errors
+            errors.append(f"Fill at index {idx} (id={fill.get('id')}): Error saving order - {str(e)}")
+            continue
 
-        return saved_orders, errors
+    # Commit all changes in one transaction (moved outside the loop)
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        errors.insert(0, f"Database error committing Tradovate fills: {str(e)}")
+        # If commit fails, nothing was actually saved
+        return [], errors
+
+    return saved_orders, errors
     

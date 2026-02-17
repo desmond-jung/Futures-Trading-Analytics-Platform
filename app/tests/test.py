@@ -1,7 +1,7 @@
 import unittest
 import os
 from app.main import app
-from app.db.models import db, Trade
+from app.db.models import db, Trade, Order
 
 class TestTrades(unittest.TestCase):
     """ Set up test client and database before test"""
@@ -28,12 +28,30 @@ class TestTrades(unittest.TestCase):
     def tearDown(self):
         print("Starting tearDown Test")
         with app.app_context():
+            # Delete all data first (must be done before dropping tables)
+            try:
+                Trade.query.delete()
+                Order.query.delete()
+                db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                print(f"Warning: Error during cleanup: {e}")
+            # Then drop tables
             db.session.remove()
-            db.drop_all()
+            try:
+                db.drop_all()
+            except Exception as e:
+                print(f"Warning: Error dropping tables: {e}")
         print("Cleaned up test db")
         
     def test_insert_trade(self):
         print("Starting insert_trade test")
+        # Ensure database is clean before this test
+        with app.app_context():
+            Trade.query.delete()
+            Order.query.delete()
+            db.session.commit()
+        
         trade_data = {
             'id': 'TEST003',
             'acc_id': 'ACC01',
@@ -71,6 +89,12 @@ class TestTrades(unittest.TestCase):
     
     def test_get_trades(self):
         print("Starting get_trades test")
+        # Ensure database is clean before this test
+        with app.app_context():
+            Trade.query.delete()
+            Order.query.delete()
+            db.session.commit()
+        
         response = self.app.get('/api/trades')
         response_data = response.get_json()
 
@@ -81,6 +105,12 @@ class TestTrades(unittest.TestCase):
     
     def test_get_all_trades_with_data(self):
         print("Starting get_all_trades_with_data test")
+        # Ensure database is clean before this test
+        with app.app_context():
+            Trade.query.delete()
+            Order.query.delete()
+            db.session.commit()
+        
         trade_data = [{
             'id': 'TEST001',
             'acc_id': 'ACC01',
@@ -152,7 +182,15 @@ class TestTrades(unittest.TestCase):
 
     def test_daily_pnl_single_day(self):
         """Starting Test daily PnL with trades on one day"""
-        # Insert 3 trades on same day
+        # Ensure database is clean before this test
+        with app.app_context():
+            Trade.query.delete()
+            Order.query.delete()
+            db.session.commit()
+        
+        # Insert 3 trades on same trading day
+        # IMPORTANT: All exit times must be BEFORE 3pm PST to be on the same trading day
+        # Trading day logic: trades after 3pm PST belong to the NEXT trading day
         trades = [
             {
                 'id': 'TEST_PNL_001',
@@ -160,7 +198,7 @@ class TestTrades(unittest.TestCase):
                 'symbol': 'MGC',
                 'direction': 'LONG',
                 'entry_time': '2024-01-15T09:30:00',
-                'exit_time': '2024-01-15T15:45:00',
+                'exit_time': '2024-01-15T14:00:00',  # Changed from 15:45 to 14:00 (before 3pm)
                 'entry_price': 4231.5,
                 'exit_price': 4500.0,
                 'quantity': 1,
@@ -173,7 +211,7 @@ class TestTrades(unittest.TestCase):
                 'symbol': 'NQ',
                 'direction': 'LONG',
                 'entry_time': '2024-01-15T10:00:00',
-                'exit_time': '2024-01-15T14:00:00',
+                'exit_time': '2024-01-15T14:00:00',  # Already before 3pm
                 'entry_price': 25000,
                 'exit_price': 25100,
                 'quantity': 1,
@@ -186,7 +224,7 @@ class TestTrades(unittest.TestCase):
                 'symbol': 'MGC',
                 'direction': 'SHORT',
                 'entry_time': '2024-01-15T11:00:00',
-                'exit_time': '2024-01-15T13:00:00',
+                'exit_time': '2024-01-15T13:00:00',  # Already before 3pm
                 'entry_price': 4500,
                 'exit_price': 4480,
                 'quantity': 1,
@@ -220,15 +258,21 @@ class TestTrades(unittest.TestCase):
 
     def test_daily_pnl_multiple_days(self):
         """Starting Test daily PnL with trades on multiple days"""
+        # Ensure database is clean before this test
+        with app.app_context():
+            Trade.query.delete()
+            Order.query.delete()
+            db.session.commit()
+        
         trades = [
-            # Day 1: 2024-01-15
+            # Trading Day 1: 2024-01-15 (all exits before 3pm PST)
             {
                 'id': 'TEST_DAY1_001',
                 'acc_id': 'ACC01',
                 'symbol': 'MGC',
                 'direction': 'LONG',
                 'entry_time': '2024-01-15T09:30:00',
-                'exit_time': '2024-01-15T15:45:00',
+                'exit_time': '2024-01-15T14:00:00',  # Changed from 15:45 to 14:00 (before 3pm)
                 'entry_price': 4000,
                 'exit_price': 4100,
                 'quantity': 1,
@@ -241,21 +285,21 @@ class TestTrades(unittest.TestCase):
                 'symbol': 'NQ',
                 'direction': 'LONG',
                 'entry_time': '2024-01-15T10:00:00',
-                'exit_time': '2024-01-15T14:00:00',
+                'exit_time': '2024-01-15T14:00:00',  # Already before 3pm
                 'entry_price': 25000,
                 'exit_price': 25050,
                 'quantity': 1,
                 'pnl': 50.0,
                 'strategy': 'Test'
             },
-            # Day 2: 2024-01-16
+            # Trading Day 2: 2024-01-16 (all exits before 3pm PST)
             {
                 'id': 'TEST_DAY2_001',
                 'acc_id': 'ACC01',
                 'symbol': 'MGC',
                 'direction': 'LONG',
                 'entry_time': '2024-01-16T09:30:00',
-                'exit_time': '2024-01-16T15:45:00',
+                'exit_time': '2024-01-16T14:00:00',  # Changed from 15:45 to 14:00 (before 3pm)
                 'entry_price': 4100,
                 'exit_price': 4050,
                 'quantity': 1,
@@ -268,7 +312,7 @@ class TestTrades(unittest.TestCase):
                 'symbol': 'NQ',
                 'direction': 'LONG',
                 'entry_time': '2024-01-16T10:00:00',
-                'exit_time': '2024-01-16T14:00:00',
+                'exit_time': '2024-01-16T14:00:00',  # Already before 3pm
                 'entry_price': 25000,
                 'exit_price': 25200,
                 'quantity': 1,
